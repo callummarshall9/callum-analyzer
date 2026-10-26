@@ -27,7 +27,8 @@ Create a NuGet package with `dotnet pack Analyzer/Analyzer.csproj`. The
 `Publish NuGet package` GitHub Actions workflow tests, packs, and publishes
 the package to GitHub Packages whenever a GitHub Release is published. The
 release tag supplies the package version, with an optional leading `v`
-removed (for example, `v1.2.3` publishes version `1.2.3`).
+removed (for example, `v1.2.3` publishes version `1.2.3`). The workflow can
+also be run manually from the Actions tab by supplying a release tag.
 
 The workflow uses the repository's `GITHUB_TOKEN` to publish. Add a
 `GH_PACKAGES_TOKEN` Actions secret containing a classic personal access token

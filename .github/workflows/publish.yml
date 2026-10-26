@@ -3,6 +3,12 @@ name: Publish NuGet package
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to publish, such as v1.0.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,6 +20,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
@@ -25,8 +33,10 @@ jobs:
 
       - name: Pack
         shell: bash
+        env:
+          PACKAGE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${PACKAGE_TAG#v}"
           dotnet pack Analyzer/Analyzer.csproj \
             --configuration Release \
             --no-restore \
@@ -56,7 +66,17 @@ jobs:
           owner_type="$(gh api "/users/$owner" --jq '.type')"
           if [[ "$owner_type" == "Organization" ]]; then
             endpoint="/orgs/$owner/packages/nuget/$package/visibility"
+            package_list="/orgs/$owner/packages?package_type=nuget&per_page=100"
           else
             endpoint="/user/packages/nuget/$package/visibility"
+            package_list="/user/packages?package_type=nuget&per_page=100"
           fi
-          gh api --method PATCH "$endpoint" -f visibility=public
+          visibility="$(gh api "$package_list" --jq --arg name "$package" '[.[] | select(.name == $name)] | first | .visibility // empty')"
+          if [[ "$visibility" == "public" ]]; then
+            echo "Package is already public."
+          elif [[ "$visibility" == "private" ]]; then
+            gh api --method PATCH "$endpoint" -f visibility=public
+          else
+            echo "Could not find package '$package' in GitHub Packages." >&2
+            exit 1
+          fi
