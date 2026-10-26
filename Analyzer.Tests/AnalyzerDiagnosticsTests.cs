@@ -131,6 +131,73 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Fact]
+    public async Task KeepsServiceCollectionRegistrationAtProjectRootWithoutServicePassThroughRules()
+    {
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "AnalyzerTestProject");
+        const string serviceCollection = """
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public interface IServiceCollection
+                {
+                    IServiceCollection AddSingleton<T>();
+                }
+            }
+            """;
+        const string registration = """
+            using Microsoft.Extensions.DependencyInjection;
+
+            public static class RegistrationExtensions
+            {
+                public static IServiceCollection AddApplication(this IServiceCollection services)
+                {
+                    services.AddSingleton<object>();
+                    return services;
+                }
+            }
+            """;
+        var syntaxTrees = new[]
+        {
+            CSharpSyntaxTree.ParseText(
+                serviceCollection,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                Path.Combine(projectDirectory, "Models", "IServiceCollection.cs")),
+            CSharpSyntaxTree.ParseText(
+                registration,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                Path.Combine(projectDirectory, "ServiceCollectionExtensions.cs")),
+            CSharpSyntaxTree.ParseText(
+                registration,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                Path.Combine(projectDirectory, "Exposures", "ServiceCollectionExtensions.cs"))
+        };
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            syntaxTrees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var analyzerOptions = new AnalyzerOptions(
+            ImmutableArray<AdditionalText>.Empty,
+            new ProjectDirectoryAnalyzerConfigOptionsProvider(projectDirectory));
+        var diagnostics = await compilation
+            .WithAnalyzers(
+                ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()),
+                new CompilationWithAnalyzersOptions(analyzerOptions, null, false, false, false))
+            .GetAnalyzerDiagnosticsAsync();
+        var registrationLocationWarning = Assert.Single(
+            diagnostics.Where(diagnostic => diagnostic.Id == "RAG027"));
+
+        Assert.EndsWith(
+            Path.Combine("Exposures", "ServiceCollectionExtensions.cs"),
+            registrationLocationWarning.Location.SourceTree!.FilePath,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id is "RAG014" or "RAG015" or "RAG024");
+    }
+
+    [Fact]
     public async Task ModelsAllowDataPropertiesButReportConstructorsAndLogic()
     {
         var files = new[]
@@ -501,5 +568,54 @@ public sealed class AnalyzerDiagnosticsTests
         return await compilation
             .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ServiceHierarchyAnalyzer()))
             .GetAnalyzerDiagnosticsAsync();
+    }
+
+    private sealed class ProjectDirectoryAnalyzerConfigOptionsProvider : AnalyzerConfigOptionsProvider
+    {
+        private readonly AnalyzerConfigOptions globalOptions;
+
+        public ProjectDirectoryAnalyzerConfigOptionsProvider(string projectDirectory)
+        {
+            globalOptions = new ProjectDirectoryAnalyzerConfigOptions(projectDirectory);
+        }
+
+        public override AnalyzerConfigOptions GlobalOptions => globalOptions;
+
+        public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) => EmptyAnalyzerConfigOptions.Instance;
+
+        public override AnalyzerConfigOptions GetOptions(AdditionalText textFile) => EmptyAnalyzerConfigOptions.Instance;
+    }
+
+    private sealed class ProjectDirectoryAnalyzerConfigOptions : AnalyzerConfigOptions
+    {
+        private readonly string projectDirectory;
+
+        public ProjectDirectoryAnalyzerConfigOptions(string projectDirectory)
+        {
+            this.projectDirectory = projectDirectory;
+        }
+
+        public override bool TryGetValue(string key, out string value)
+        {
+            if (key == "build_property.MSBuildProjectDirectory")
+            {
+                value = projectDirectory;
+                return true;
+            }
+
+            value = string.Empty;
+            return false;
+        }
+    }
+
+    private sealed class EmptyAnalyzerConfigOptions : AnalyzerConfigOptions
+    {
+        public static EmptyAnalyzerConfigOptions Instance { get; } = new();
+
+        public override bool TryGetValue(string key, out string value)
+        {
+            value = string.Empty;
+            return false;
+        }
     }
 }

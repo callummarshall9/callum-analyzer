@@ -28,3 +28,4 @@ RAG023 | Architecture | Warning | Keep service methods instance-based
 RAG024 | Architecture | Warning | Place files in Exposures, Models, Services, or Brokers folders except Program.cs
 RAG025 | Architecture | Warning | Keep models as data carriers with auto-properties only
 RAG026 | Architecture | Warning | Place enums in a folder under Models
+RAG027 | Architecture | Warning | Keep IServiceCollection registration files at the project root

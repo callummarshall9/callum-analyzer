@@ -31,6 +31,7 @@ guidelines described by its diagnostic IDs.
 | RAG024 | Place files in Exposures, Models, Services, or Brokers folders (except `Program.cs`) |
 | RAG025 | Keep files under `Models` as data carriers with auto-properties only |
 | RAG026 | Place enums in any folder under `Models` |
+| RAG027 | Keep `IServiceCollection` registration files at the project root; do not place them under `Exposures` |
 
 Build the analyzer with `dotnet build Analyzer/Analyzer.csproj` and run its
 tests with `dotnet test Analyzer.Tests/Analyzer.Tests.csproj`. The diagnostics
@@ -64,6 +65,11 @@ package visibility to **Public** after publishing. The token owner must have
 permission to manage the package (and, for an organization, any required SSO
 authorization). Add the resulting `RoslynArchitectureGuidelines` package to
 a consuming project to run the analyzer during builds.
+
+`IServiceCollection` registration methods may configure registrations directly
+and are exempt from service pass-through checks, but their source file must be
+at the project root. The package exposes `MSBuildProjectDirectory` to the
+analyzer so it can check this location.
 
 Service, broker, and exposure rules identify types by convention: services are
 in a `Services` namespace or have a name ending in `Service`; brokers are in a

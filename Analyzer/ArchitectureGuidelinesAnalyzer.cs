@@ -54,6 +54,8 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         "RAG025", "Keep models as data carriers", "Models should contain only auto-properties and no constructors or logic");
     private static readonly DiagnosticDescriptor EnumInModels = Rule(
         "RAG026", "Place enums under Models", "Enums should be declared in a folder under Models");
+    private static readonly DiagnosticDescriptor ServiceCollectionAtRoot = Rule(
+        "RAG027", "Keep service registration at the project root", "IServiceCollection registration should be in a file at the project root, not under Exposures or another folder");
 
     private static readonly ImmutableArray<DiagnosticDescriptor> SupportedRules = ImmutableArray.Create(
         NoGlobalAlias,
@@ -74,7 +76,8 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         ExposurePassThrough,
         LayerFolder,
         ModelDataOnly,
-        EnumInModels);
+        EnumInModels,
+        ServiceCollectionAtRoot);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => SupportedRules;
 
@@ -134,10 +137,14 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
     {
         var root = (CompilationUnitSyntax)context.Node;
         var filePath = root.SyntaxTree.FilePath;
+        var isServiceCollectionRegistration = root.DescendantNodes()
+            .OfType<MethodDeclarationSyntax>()
+            .Any(method => IsServiceCollectionRegistration(method, context.SemanticModel, context.CancellationToken));
         if (!string.IsNullOrEmpty(filePath))
         {
             var pathSegments = filePath.Split('/', '\\');
             if (!pathSegments[pathSegments.Length - 1].Equals("Program.cs", StringComparison.OrdinalIgnoreCase) &&
+                !isServiceCollectionRegistration &&
                 !pathSegments.Any(segment =>
                     segment.Equals("Exposures", StringComparison.OrdinalIgnoreCase) ||
                     segment.Equals("Models", StringComparison.OrdinalIgnoreCase) ||
@@ -149,6 +156,22 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
                     Location.Create(root.SyntaxTree, new TextSpan(0, 0))));
             }
 
+            if (isServiceCollectionRegistration &&
+                context.Options.AnalyzerConfigOptionsProvider.GlobalOptions.TryGetValue(
+                    "build_property.MSBuildProjectDirectory",
+                    out var projectDirectory) &&
+                !string.IsNullOrEmpty(projectDirectory) &&
+                !StringComparer.OrdinalIgnoreCase.Equals(
+                    System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(filePath)),
+                    System.IO.Path.GetFullPath(projectDirectory)))
+            {
+                var registrationMethod = root.DescendantNodes()
+                    .OfType<MethodDeclarationSyntax>()
+                    .First(method => IsServiceCollectionRegistration(method, context.SemanticModel, context.CancellationToken));
+                context.ReportDiagnostic(Diagnostic.Create(
+                    ServiceCollectionAtRoot,
+                    registrationMethod.Identifier.GetLocation()));
+            }
         }
 
         var types = root.DescendantNodes()
@@ -475,12 +498,18 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
             return;
         }
 
+        if (IsServiceCollectionRegistration(method))
+        {
+            return;
+        }
+
         if (!HasSingleInvocationBody(declaration))
         {
             if (method.IsExtensionMethod)
             {
                 context.ReportDiagnostic(Diagnostic.Create(ExtensionMethodPassThrough, declaration.Identifier.GetLocation()));
             }
+
             else if (!IsService(method.ContainingType) &&
                 !IsBroker(method.ContainingType) &&
                 !IsExposureType(method.ContainingType))
@@ -508,6 +537,17 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         }
 
     }
+
+    private static bool IsServiceCollectionRegistration(
+        MethodDeclarationSyntax declaration,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken) =>
+        IsServiceCollectionRegistration(semanticModel.GetDeclaredSymbol(declaration, cancellationToken));
+
+    private static bool IsServiceCollectionRegistration(IMethodSymbol? method) =>
+        method is not null &&
+        method.Parameters.Any(parameter =>
+            parameter.Type.ToDisplayString() == "Microsoft.Extensions.DependencyInjection.IServiceCollection");
 
     private static bool HasSingleInvocationBody(MethodDeclarationSyntax method) =>
         GetSingleInvocation(method) is not null;
