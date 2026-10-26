@@ -23,9 +23,19 @@ Build the analyzer with `dotnet build Analyzer/Analyzer.csproj` and run its
 tests with `dotnet test Analyzer.Tests/Analyzer.Tests.csproj`. The diagnostics
 are warnings and can be configured in `.editorconfig` by their `RAG` IDs.
 
-Create a NuGet package with `dotnet pack Analyzer/Analyzer.csproj`. Add the
-resulting `RoslynArchitectureGuidelines` package to a consuming project to run
-the analyzer during builds.
+Create a NuGet package with `dotnet pack Analyzer/Analyzer.csproj`. The
+`Publish NuGet package` GitHub Actions workflow tests, packs, and publishes
+the package to GitHub Packages whenever a GitHub Release is published. The
+release tag supplies the package version, with an optional leading `v`
+removed (for example, `v1.2.3` publishes version `1.2.3`).
+
+The workflow uses the repository's `GITHUB_TOKEN` to publish. Add a
+`GH_PACKAGES_TOKEN` Actions secret containing a classic personal access token
+with `write:packages` scope; the workflow uses it through GitHub CLI to set the
+package visibility to **Public** after publishing. The token owner must have
+permission to manage the package (and, for an organization, any required SSO
+authorization). Add the resulting `RoslynArchitectureGuidelines` package to
+a consuming project to run the analyzer during builds.
 
 Service and exposure rules identify types by convention: a service is in a
 `Services` namespace or has a name ending in `Service`; an exposure type is in

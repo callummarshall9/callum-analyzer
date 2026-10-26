@@ -1,0 +1,62 @@
+name: Publish NuGet package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        run: dotnet test Analyzer.Tests/Analyzer.Tests.csproj --configuration Release
+
+      - name: Pack
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          dotnet pack Analyzer/Analyzer.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:PackageVersion="$version" \
+            -p:RepositoryUrl="https://github.com/$GITHUB_REPOSITORY" \
+            -p:PublishRepositoryUrl=true \
+            --output ./artifacts
+
+      - name: Publish to GitHub Packages
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          dotnet nuget push ./artifacts/*.nupkg \
+            --source "https://nuget.pkg.github.com/$owner/index.json" \
+            --api-key "$GITHUB_TOKEN" \
+            --skip-duplicate
+
+      - name: Make package public
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          package="RoslynArchitectureGuidelines"
+          owner_type="$(gh api "/users/$owner" --jq '.type')"
+          if [[ "$owner_type" == "Organization" ]]; then
+            endpoint="/orgs/$owner/packages/nuget/$package/visibility"
+          else
+            endpoint="/user/packages/nuget/$package/visibility"
+          fi
+          gh api --method PATCH "$endpoint" -f visibility=public
