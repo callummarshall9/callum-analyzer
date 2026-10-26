@@ -28,10 +28,27 @@ guidelines described by its diagnostic IDs.
 | RAG021 | Match each Processing service to its corresponding Foundation service |
 | RAG022 | Keep Aggregation service dependencies within one service variation |
 | RAG023 | Keep service methods instance-based to support unit testing |
+| RAG024 | Place files in Exposures, Models, Services, or Brokers folders (except `Program.cs`) |
+| RAG025 | Keep files under `Models` as data carriers with auto-properties only |
+| RAG026 | Place enums in any folder under `Models` |
 
 Build the analyzer with `dotnet build Analyzer/Analyzer.csproj` and run its
 tests with `dotnet test Analyzer.Tests/Analyzer.Tests.csproj`. The diagnostics
 are warnings and can be configured in `.editorconfig` by their `RAG` IDs.
+
+The analyzer package also includes IDE code fixes for RAG001, RAG003, RAG005,
+and RAG006: remove `global::`, remove `ConfigureAwait(false)`, sort or remove
+using directives, and rethrow from an empty catch block. The RAG006 fix changes
+behavior by rethrowing an exception that was previously swallowed. Other
+diagnostics describe architectural changes without a unique safe rewrite, so
+they remain manual fixes.
+
+The project also provides a [The Standard development agent skill](./.github/skills/the-standard-development/SKILL.md)
+for planning, implementing, reviewing, and validating Standard-oriented C#
+changes. It is included in the NuGet package at
+`contentFiles/any/any/.github/skills/the-standard-development/SKILL.md`; copy
+that folder into a consuming repository's `.github/skills` directory to make
+the skill discoverable by compatible coding agents.
 
 Create a NuGet package with `dotnet pack Analyzer/Analyzer.csproj`. The
 `Publish NuGet package` GitHub Actions workflow tests, packs, and publishes

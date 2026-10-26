@@ -25,3 +25,6 @@ RAG020 | Architecture | Warning | Keep broker dependencies within service limits
 RAG021 | Architecture | Warning | Match processing services to their foundation service
 RAG022 | Architecture | Warning | Aggregate services from one variation
 RAG023 | Architecture | Warning | Keep service methods instance-based
+RAG024 | Architecture | Warning | Place files in Exposures, Models, Services, or Brokers folders except Program.cs
+RAG025 | Architecture | Warning | Keep models as data carriers with auto-properties only
+RAG026 | Architecture | Warning | Place enums in a folder under Models

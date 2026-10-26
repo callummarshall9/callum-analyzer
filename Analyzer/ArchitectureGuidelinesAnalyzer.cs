@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
 
 namespace RoslynArchitectureGuidelines;
 
@@ -47,6 +48,12 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         "RAG015", "Keep business logic in services or brokers", "Methods outside services and brokers should directly forward a single call");
     private static readonly DiagnosticDescriptor ExposurePassThrough = Rule(
         "RAG016", "Keep exposures as service pass-throughs", "Exposure types must inject a service and directly forward calls to it");
+    private static readonly DiagnosticDescriptor LayerFolder = Rule(
+        "RAG024", "Place files in an architecture layer", "Place this file in an Exposures, Models, Services, or Brokers folder");
+    private static readonly DiagnosticDescriptor ModelDataOnly = Rule(
+        "RAG025", "Keep models as data carriers", "Models should contain only auto-properties and no constructors or logic");
+    private static readonly DiagnosticDescriptor EnumInModels = Rule(
+        "RAG026", "Place enums under Models", "Enums should be declared in a folder under Models");
 
     private static readonly ImmutableArray<DiagnosticDescriptor> SupportedRules = ImmutableArray.Create(
         NoGlobalAlias,
@@ -64,7 +71,10 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         ConstructorInjectionOnly,
         ExtensionMethodPassThrough,
         BusinessLogicInServicesOrBrokers,
-        ExposurePassThrough);
+        ExposurePassThrough,
+        LayerFolder,
+        ModelDataOnly,
+        EnumInModels);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => SupportedRules;
 
@@ -76,6 +86,8 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(AnalyzeLocalFunction, SyntaxKind.LocalFunctionStatement);
         context.RegisterSyntaxNodeAction(AnalyzeConfigureAwait, SyntaxKind.InvocationExpression);
         context.RegisterSyntaxNodeAction(AnalyzeCompilationUnit, SyntaxKind.CompilationUnit);
+        context.RegisterSyntaxNodeAction(AnalyzeModelType, SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.RecordDeclaration);
+        context.RegisterSyntaxNodeAction(AnalyzeEnumLocation, SyntaxKind.EnumDeclaration);
         context.RegisterSyntaxNodeAction(AnalyzeCatch, SyntaxKind.CatchClause);
         context.RegisterSyntaxNodeAction(AnalyzeDiagnosticsLogging, SyntaxKind.QualifiedName, SyntaxKind.InvocationExpression);
         context.RegisterSyntaxNodeAction(AnalyzeFactoryMethod, SyntaxKind.MethodDeclaration);
@@ -121,6 +133,24 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeCompilationUnit(SyntaxNodeAnalysisContext context)
     {
         var root = (CompilationUnitSyntax)context.Node;
+        var filePath = root.SyntaxTree.FilePath;
+        if (!string.IsNullOrEmpty(filePath))
+        {
+            var pathSegments = filePath.Split('/', '\\');
+            if (!pathSegments[pathSegments.Length - 1].Equals("Program.cs", StringComparison.OrdinalIgnoreCase) &&
+                !pathSegments.Any(segment =>
+                    segment.Equals("Exposures", StringComparison.OrdinalIgnoreCase) ||
+                    segment.Equals("Models", StringComparison.OrdinalIgnoreCase) ||
+                    segment.Equals("Services", StringComparison.OrdinalIgnoreCase) ||
+                    segment.Equals("Brokers", StringComparison.OrdinalIgnoreCase)))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(
+                    LayerFolder,
+                    Location.Create(root.SyntaxTree, new TextSpan(0, 0))));
+            }
+
+        }
+
         var types = root.DescendantNodes()
             .Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
             .ToArray();
@@ -160,7 +190,45 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    private static bool IsUsingDirectiveUsed(
+    private static void AnalyzeModelType(SyntaxNodeAnalysisContext context)
+    {
+        var type = (TypeDeclarationSyntax)context.Node;
+        var filePath = type.SyntaxTree.FilePath;
+        if (string.IsNullOrEmpty(filePath) ||
+            !filePath.Split('/', '\\').Any(segment =>
+                segment.Equals("Models", StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        foreach (var member in type.Members)
+        {
+            var isDataProperty = member is PropertyDeclarationSyntax property &&
+                property.ExpressionBody is null &&
+                property.AccessorList is { Accessors.Count: > 0 } accessors &&
+                accessors.Accessors.All(accessor => accessor.Body is null && accessor.ExpressionBody is null);
+            if (!isDataProperty)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(ModelDataOnly, member.GetLocation()));
+            }
+        }
+    }
+
+    private static void AnalyzeEnumLocation(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (EnumDeclarationSyntax)context.Node;
+        var filePath = declaration.SyntaxTree.FilePath;
+        if (string.IsNullOrEmpty(filePath) ||
+            filePath.Split('/', '\\').Any(segment =>
+                segment.Equals("Models", StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(Diagnostic.Create(EnumInModels, declaration.Identifier.GetLocation()));
+    }
+
+    internal static bool IsUsingDirectiveUsed(
         UsingDirectiveSyntax usingDirective,
         CompilationUnitSyntax root,
         SemanticModel semanticModel,

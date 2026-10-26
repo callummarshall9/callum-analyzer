@@ -96,6 +96,121 @@ public sealed class AnalyzerDiagnosticsTests
     }
 
     [Fact]
+    public async Task ReportsFilesOutsideArchitectureLayerFoldersExceptProgram()
+    {
+        var files = new[]
+        {
+            ("src/Exposures/Exposure.cs", "public sealed class Exposure { }"),
+            ("src/Models/Widget.cs", "public sealed class Widget { }"),
+            ("src/Services/WidgetService.cs", "public sealed class WidgetService { }"),
+            ("src/Brokers/WidgetBroker.cs", "public sealed class WidgetBroker { }"),
+            ("src/Helpers/WidgetHelper.cs", "public sealed class WidgetHelper { }"),
+            ("src/Program.cs", "public static class Program { }")
+        };
+        var syntaxTrees = files.Select(file =>
+            CSharpSyntaxTree.ParseText(
+                file.Item2,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                file.Item1));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            syntaxTrees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+        var diagnostic = Assert.Single(diagnostics.Where(diagnostic => diagnostic.Id == "RAG024"));
+
+        Assert.Equal("src/Helpers/WidgetHelper.cs", diagnostic.Location.SourceTree!.FilePath);
+    }
+
+    [Fact]
+    public async Task ModelsAllowDataPropertiesButReportConstructorsAndLogic()
+    {
+        var files = new[]
+        {
+            ("src/Models/Widget.cs", """
+                public sealed class Widget
+                {
+                    public int Id { get; set; }
+                    public string Name { get; init; }
+                    public Widget() { }
+                    public int GetId() => Id;
+                    public int Calculated => Id + 1;
+                    public string Value;
+                }
+                """),
+            ("src/Models/WidgetRecord.cs", """
+                public record struct WidgetRecord(int Id)
+                {
+                    public string Name { get; init; }
+                }
+                """)
+        };
+        var syntaxTrees = files.Select(file =>
+            CSharpSyntaxTree.ParseText(
+                file.Item2,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                file.Item1));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            syntaxTrees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+        var modelDiagnostics = diagnostics.Where(diagnostic => diagnostic.Id == "RAG025").ToArray();
+
+        Assert.Equal(4, modelDiagnostics.Length);
+        Assert.All(modelDiagnostics, diagnostic =>
+            Assert.Equal("src/Models/Widget.cs", diagnostic.Location.SourceTree!.FilePath));
+    }
+
+    [Fact]
+    public async Task ReportsEnumsOutsideModelsAndAllowsNestedModelFolders()
+    {
+        var files = new[]
+        {
+            ("src/Shared/Status.cs", "public enum Status { Active, Inactive }"),
+            ("src/Models/Enums/OrderStatus.cs", "public enum OrderStatus { New, Complete }"),
+            ("src/Models/OrderType.cs", "public enum OrderType { Standard, Express }")
+        };
+        var syntaxTrees = files.Select(file =>
+            CSharpSyntaxTree.ParseText(
+                file.Item2,
+                new CSharpParseOptions(LanguageVersion.Latest),
+                file.Item1));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            syntaxTrees,
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+        var diagnostic = Assert.Single(diagnostics.Where(diagnostic => diagnostic.Id == "RAG026"));
+
+        Assert.Equal("src/Shared/Status.cs", diagnostic.Location.SourceTree!.FilePath);
+    }
+
+    [Fact]
     public async Task DoesNotReportGenericUsingAsUnused()
     {
         const string source = """
