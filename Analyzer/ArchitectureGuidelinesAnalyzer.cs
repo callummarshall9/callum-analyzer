@@ -38,9 +38,15 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
     private static readonly DiagnosticDescriptor NoExposureDependency = Rule(
         "RAG011", "Services must not depend on exposure types", "Do not inject exposure-layer type '{0}' into a service");
     private static readonly DiagnosticDescriptor NoExposureState = Rule(
-        "RAG012", "Keep exposure types free of data", "Exposure types must not declare fields, properties, or primary-constructor parameters");
+        "RAG012", "Keep exposure types free of data", "Exposure types may only retain private readonly injected service fields");
     private static readonly DiagnosticDescriptor ConstructorInjectionOnly = Rule(
         "RAG013", "Keep service constructors declarative", "Service constructors should only assign injected dependencies and must not create objects or run logic");
+    private static readonly DiagnosticDescriptor ExtensionMethodPassThrough = Rule(
+        "RAG014", "Keep extension methods as pass-throughs", "Extension methods should directly forward a single call without adding logic");
+    private static readonly DiagnosticDescriptor BusinessLogicInServicesOrBrokers = Rule(
+        "RAG015", "Keep business logic in services or brokers", "Methods outside services and brokers should directly forward a single call");
+    private static readonly DiagnosticDescriptor ExposurePassThrough = Rule(
+        "RAG016", "Keep exposures as service pass-throughs", "Exposure types must inject a service and directly forward calls to it");
 
     private static readonly ImmutableArray<DiagnosticDescriptor> SupportedRules = ImmutableArray.Create(
         NoGlobalAlias,
@@ -55,7 +61,10 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         OneContractPerService,
         NoExposureDependency,
         NoExposureState,
-        ConstructorInjectionOnly);
+        ConstructorInjectionOnly,
+        ExtensionMethodPassThrough,
+        BusinessLogicInServicesOrBrokers,
+        ExposurePassThrough);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => SupportedRules;
 
@@ -75,6 +84,7 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(AnalyzeConstructor, SyntaxKind.ConstructorDeclaration);
         context.RegisterSyntaxNodeAction(AnalyzeServiceReturnTypes, SyntaxKind.ClassDeclaration);
         context.RegisterSyntaxNodeAction(AnalyzeExposureState, SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.InterfaceDeclaration, SyntaxKind.RecordDeclaration);
+        context.RegisterSyntaxNodeAction(AnalyzeMethodLogic, SyntaxKind.MethodDeclaration);
         context.RegisterSymbolAction(AnalyzeServiceDependencies, SymbolKind.NamedType);
     }
 
@@ -364,13 +374,158 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
             return;
         }
 
-        var hasState = declaration is RecordDeclarationSyntax record && record.ParameterList is { Parameters.Count: > 0 } ||
-            declaration.Members.Any(member => member is FieldDeclarationSyntax or PropertyDeclarationSyntax or EventFieldDeclarationSyntax);
-        if (hasState)
+        var type = context.SemanticModel.GetDeclaredSymbol(declaration, context.CancellationToken);
+        var hasInvalidState = declaration is RecordDeclarationSyntax record &&
+                record.ParameterList?.Parameters.Any(parameter =>
+                    type is null || !IsService(context.SemanticModel.GetTypeInfo(parameter.Type!, context.CancellationToken).Type)) == true ||
+            declaration.Members.Any(member => member switch
+            {
+                FieldDeclarationSyntax field => !IsInjectedServiceField(field, type, context.SemanticModel, context.CancellationToken),
+                PropertyDeclarationSyntax or EventFieldDeclarationSyntax => true,
+                _ => false
+            });
+        if (hasInvalidState)
         {
             context.ReportDiagnostic(Diagnostic.Create(NoExposureState, declaration.Identifier.GetLocation()));
         }
+
+        if (declaration is not InterfaceDeclarationSyntax &&
+            type is not null &&
+            !HasInjectedServiceParameter(type))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(ExposurePassThrough, declaration.Identifier.GetLocation()));
+        }
     }
+
+    private static void AnalyzeMethodLogic(SyntaxNodeAnalysisContext context)
+    {
+        var declaration = (MethodDeclarationSyntax)context.Node;
+        var method = context.SemanticModel.GetDeclaredSymbol(declaration, context.CancellationToken);
+        if (method is null ||
+            declaration.Body is null && declaration.ExpressionBody is null)
+        {
+            return;
+        }
+
+        if (!HasSingleInvocationBody(declaration))
+        {
+            if (method.IsExtensionMethod)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(ExtensionMethodPassThrough, declaration.Identifier.GetLocation()));
+            }
+            else if (!IsService(method.ContainingType) &&
+                !IsBroker(method.ContainingType) &&
+                !IsExposureType(method.ContainingType))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(BusinessLogicInServicesOrBrokers, declaration.Identifier.GetLocation()));
+            }
+
+            if (IsExposureType(method.ContainingType))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(ExposurePassThrough, declaration.Identifier.GetLocation()));
+            }
+
+            return;
+        }
+
+        if (method.IsExtensionMethod)
+        {
+            return;
+        }
+
+        if (IsExposureType(method.ContainingType) &&
+            !IsInjectedServiceCall(declaration, method.ContainingType, context.SemanticModel, context.CancellationToken))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(ExposurePassThrough, declaration.Identifier.GetLocation()));
+        }
+
+    }
+
+    private static bool HasSingleInvocationBody(MethodDeclarationSyntax method) =>
+        GetSingleInvocation(method) is not null;
+
+    private static bool IsInjectedServiceCall(
+        MethodDeclarationSyntax method,
+        INamedTypeSymbol containingType,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        var invocation = GetSingleInvocation(method);
+        if (invocation?.Expression is not MemberAccessExpressionSyntax memberAccess ||
+            semanticModel.GetSymbolInfo(memberAccess.Expression, cancellationToken).Symbol is not ISymbol receiver ||
+            semanticModel.GetSymbolInfo(invocation, cancellationToken).Symbol is not IMethodSymbol calledMethod ||
+            !IsService(calledMethod.ContainingType) ||
+            !IsService(receiver switch
+            {
+                IFieldSymbol field => field.Type,
+                IParameterSymbol parameter => parameter.Type,
+                _ => null
+            }))
+        {
+            return false;
+        }
+
+        if (receiver is IParameterSymbol constructorParameter)
+        {
+            return constructorParameter.ContainingSymbol is IMethodSymbol constructor &&
+                constructor.MethodKind == MethodKind.Constructor &&
+                SymbolEqualityComparer.Default.Equals(constructor.ContainingType, containingType);
+        }
+
+        return receiver is IFieldSymbol serviceField &&
+            IsInjectedServiceField(serviceField, containingType);
+    }
+
+    private static InvocationExpressionSyntax? GetSingleInvocation(MethodDeclarationSyntax method)
+    {
+        ExpressionSyntax? expression = method.ExpressionBody?.Expression;
+        if (expression is null && method.Body is { Statements.Count: 1 } body)
+        {
+            expression = body.Statements[0] switch
+            {
+                ReturnStatementSyntax returnStatement => returnStatement.Expression,
+                ExpressionStatementSyntax expressionStatement => expressionStatement.Expression,
+                _ => null
+            };
+        }
+
+        if (expression is AwaitExpressionSyntax awaitExpression)
+        {
+            expression = awaitExpression.Expression;
+        }
+
+        return expression as InvocationExpressionSyntax;
+    }
+
+    private static bool HasInjectedServiceParameter(INamedTypeSymbol type) =>
+        type.InstanceConstructors
+            .SelectMany(constructor => constructor.Parameters)
+            .Any(parameter => IsService(parameter.Type));
+
+    private static bool IsInjectedServiceField(
+        FieldDeclarationSyntax field,
+        INamedTypeSymbol? containingType,
+        SemanticModel semanticModel,
+        CancellationToken cancellationToken)
+    {
+        if (containingType is null ||
+            !field.Modifiers.Any(SyntaxKind.PrivateKeyword) ||
+            !field.Modifiers.Any(SyntaxKind.ReadOnlyKeyword))
+        {
+            return false;
+        }
+
+        return field.Declaration.Variables.All(variable =>
+            semanticModel.GetDeclaredSymbol(variable, cancellationToken) is IFieldSymbol symbol &&
+            IsInjectedServiceField(symbol, containingType));
+    }
+
+    private static bool IsInjectedServiceField(IFieldSymbol field, INamedTypeSymbol containingType) =>
+        IsService(field.Type) &&
+        field.IsReadOnly &&
+        !field.IsStatic &&
+        SymbolEqualityComparer.Default.Equals(field.ContainingType, containingType) &&
+        HasInjectedServiceParameter(containingType);
 
     private static void AnalyzeServiceDependencies(SymbolAnalysisContext context)
     {
@@ -406,6 +561,14 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         symbol.Name.EndsWith("Service", StringComparison.Ordinal) ||
         symbol.ContainingNamespace.ToDisplayString().IndexOf(".Services", StringComparison.OrdinalIgnoreCase) >= 0 ||
         symbol.ContainingNamespace.Name.Equals("Services", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsService(ITypeSymbol? symbol) =>
+        symbol is INamedTypeSymbol namedType && IsService(namedType);
+
+    private static bool IsBroker(INamedTypeSymbol symbol) =>
+        symbol.Name.EndsWith("Broker", StringComparison.Ordinal) ||
+        symbol.ContainingNamespace.ToDisplayString().IndexOf(".Brokers", StringComparison.OrdinalIgnoreCase) >= 0 ||
+        symbol.ContainingNamespace.Name.Equals("Brokers", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsExposureType(TypeDeclarationSyntax declaration, SemanticModel semanticModel, CancellationToken cancellationToken)
     {

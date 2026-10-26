@@ -16,8 +16,18 @@ guidelines described by its diagnostic IDs.
 | RAG009 | Do not use optional constructor parameters or fallback object creation |
 | RAG010 | Keep services focused on one distinct return-type contract |
 | RAG011 | Do not inject exposure-layer types into services |
-| RAG012 | Keep exposure types free of fields, properties, and primary-constructor state |
+| RAG012 | Keep exposure types free of data except injected service dependencies |
 | RAG013 | Keep service constructors limited to dependency assignment |
+| RAG014 | Keep extension methods as direct one-call pass-throughs |
+| RAG015 | Keep business logic in services or brokers; other methods must be direct one-call pass-throughs |
+| RAG016 | Keep exposures limited to direct calls to injected services |
+| RAG017 | Keep service dependencies within the Standard's layer hierarchy |
+| RAG018 | Require one Foundation dependency for Processing; two or three service dependencies for orchestration-like services |
+| RAG019 | Do not mix Foundation and Processing dependencies in an Orchestration service |
+| RAG020 | Limit Foundation services to one entity broker; other service levels may depend only on utility brokers |
+| RAG021 | Match each Processing service to its corresponding Foundation service |
+| RAG022 | Keep Aggregation service dependencies within one service variation |
+| RAG023 | Keep service methods instance-based to support unit testing |
 
 Build the analyzer with `dotnet build Analyzer/Analyzer.csproj` and run its
 tests with `dotnet test Analyzer.Tests/Analyzer.Tests.csproj`. The diagnostics
@@ -38,7 +48,17 @@ permission to manage the package (and, for an organization, any required SSO
 authorization). Add the resulting `RoslynArchitectureGuidelines` package to
 a consuming project to run the analyzer during builds.
 
-Service and exposure rules identify types by convention: a service is in a
-`Services` namespace or has a name ending in `Service`; an exposure type is in
-an `Exposures` namespace or has a name ending in `Exposure`.
+Service, broker, and exposure rules identify types by convention: services are
+in a `Services` namespace or have a name ending in `Service`; brokers are in a
+`Brokers` namespace or have a name ending in `Broker`; exposure types are in an
+`Exposures` namespace or have a name ending in `Exposure`. Direct pass-through
+methods contain a single invocation and no other statements or computation.
+
+The service hierarchy analyzer classifies service levels by suffix:
+`FooService`, `FooProcessingService`, `FooOrchestrationService`,
+`FooCoordinationService`, `FooManagementService`,
+`FooUberManagementService`, and `FooAggregationService`. Utility broker
+dependencies are identified by a `UtilityBrokers` namespace. The hierarchy
+checks follow [The Standard's service guidance](https://github.com/hassanhabib/The-Standard/tree/master/2.%20Services),
+including its [dependency limits and layer balance](https://github.com/hassanhabib/The-Standard/blob/master/2.%20Services/2.%20Services.md#2002-overall-rules).
 # callum-analyzer
