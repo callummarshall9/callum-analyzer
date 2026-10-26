@@ -71,7 +71,7 @@ jobs:
             endpoint="/user/packages/nuget/$package/visibility"
             package_list="/user/packages?package_type=nuget&per_page=100"
           fi
-          visibility="$(gh api "$package_list" --jq --arg name "$package" '[.[] | select(.name == $name)] | first | .visibility // empty')"
+          visibility="$(gh api "$package_list" --jq ".[] | select(.name == \"$package\") | .visibility" | head -n 1)"
           if [[ "$visibility" == "public" ]]; then
             echo "Package is already public."
           elif [[ "$visibility" == "private" ]]; then
