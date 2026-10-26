@@ -160,7 +160,7 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         if (aliasName is not null)
         {
             return root.DescendantNodes()
-                .OfType<IdentifierNameSyntax>()
+                .OfType<SimpleNameSyntax>()
                 .Any(identifier => !identifier.Ancestors().OfType<UsingDirectiveSyntax>().Any() &&
                     identifier.Identifier.ValueText == aliasName);
         }
@@ -174,7 +174,7 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         }
 
         var references = root.DescendantNodes()
-            .OfType<IdentifierNameSyntax>();
+            .OfType<SimpleNameSyntax>();
         foreach (var reference in references)
         {
             if (reference.Ancestors().OfType<UsingDirectiveSyntax>().Any())
@@ -190,8 +190,9 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
 
             var containingNamespace = symbol.ContainingNamespace;
             if (importedSymbol is INamespaceSymbol importedNamespace &&
-                containingNamespace is not null &&
-                SymbolEqualityComparer.Default.Equals(containingNamespace, importedNamespace))
+                StringComparer.Ordinal.Equals(
+                    containingNamespace?.ToDisplayString(),
+                    importedNamespace.ToDisplayString()))
             {
                 return true;
             }

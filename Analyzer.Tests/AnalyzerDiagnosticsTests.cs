@@ -71,7 +71,6 @@ public sealed class AnalyzerDiagnosticsTests
             new[] { syntaxTree },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
         var diagnostics = await compilation
             .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
             .GetAnalyzerDiagnosticsAsync();
@@ -81,5 +80,36 @@ public sealed class AnalyzerDiagnosticsTests
         {
             Assert.Contains($"RAG{ruleNumber:000}", diagnosticIds);
         }
+    }
+
+    [Fact]
+    public async Task DoesNotReportGenericUsingAsUnused()
+    {
+        const string source = """
+            using System.Collections.Immutable;
+            using System.Text.RegularExpressions;
+
+            public sealed class Sample
+            {
+                public ImmutableArray<int> Values => ImmutableArray<int>.Empty;
+                public bool Matches(string input) => Regex.IsMatch(input, "pattern");
+            }
+            """;
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            new[] { syntaxTree },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "RAG005");
     }
 }
