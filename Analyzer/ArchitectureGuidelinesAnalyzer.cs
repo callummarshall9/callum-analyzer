@@ -56,6 +56,12 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         "RAG026", "Place enums under Models", "Enums should be declared in a folder under Models");
     private static readonly DiagnosticDescriptor ServiceCollectionAtRoot = Rule(
         "RAG027", "Keep service registration at the project root", "IServiceCollection registration should be in a file at the project root, not under Exposures or another folder");
+    private static readonly DiagnosticDescriptor NoServiceProviderResolution = Rule(
+        "RAG028", "Use constructor injection", "Do not resolve services from a provider; inject dependencies through a constructor");
+    private static readonly DiagnosticDescriptor NoManualArchitectureTypeCreation = Rule(
+        "RAG029", "Use dependency injection for architecture types", "Do not instantiate services, brokers, or exposures; resolve them through dependency injection");
+    private static readonly DiagnosticDescriptor NoFileApiInServicesOrExposures = Rule(
+        "RAG030", "Keep file-system access in brokers", "Do not use System.IO.File in services or exposures; move file-system operations to a broker");
 
     private static readonly ImmutableArray<DiagnosticDescriptor> SupportedRules = ImmutableArray.Create(
         NoGlobalAlias,
@@ -77,7 +83,10 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         LayerFolder,
         ModelDataOnly,
         EnumInModels,
-        ServiceCollectionAtRoot);
+        ServiceCollectionAtRoot,
+        NoServiceProviderResolution,
+        NoManualArchitectureTypeCreation,
+        NoFileApiInServicesOrExposures);
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => SupportedRules;
 
@@ -88,6 +97,12 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
         context.RegisterSyntaxNodeAction(AnalyzeGlobalAlias, SyntaxKind.AliasQualifiedName);
         context.RegisterSyntaxNodeAction(AnalyzeLocalFunction, SyntaxKind.LocalFunctionStatement);
         context.RegisterSyntaxNodeAction(AnalyzeConfigureAwait, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeServiceProviderResolution, SyntaxKind.InvocationExpression);
+        context.RegisterSyntaxNodeAction(
+            AnalyzeArchitectureTypeCreation,
+            SyntaxKind.ObjectCreationExpression,
+            SyntaxKind.ImplicitObjectCreationExpression);
+        context.RegisterSyntaxNodeAction(AnalyzeFileApiInServicesOrExposures, SyntaxKind.IdentifierName);
         context.RegisterSyntaxNodeAction(AnalyzeCompilationUnit, SyntaxKind.CompilationUnit);
         context.RegisterSyntaxNodeAction(AnalyzeModelType, SyntaxKind.ClassDeclaration, SyntaxKind.StructDeclaration, SyntaxKind.RecordDeclaration);
         context.RegisterSyntaxNodeAction(AnalyzeEnumLocation, SyntaxKind.EnumDeclaration);
@@ -130,6 +145,59 @@ public sealed class ArchitectureGuidelinesAnalyzer : DiagnosticAnalyzer
             context.SemanticModel.GetConstantValue(invocation.ArgumentList.Arguments[0].Expression, context.CancellationToken) is { HasValue: true, Value: false })
         {
             context.ReportDiagnostic(Diagnostic.Create(NoConfigureAwaitFalse, invocation.GetLocation()));
+        }
+    }
+
+    private static void AnalyzeServiceProviderResolution(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        var method = context.SemanticModel.GetSymbolInfo(invocation, context.CancellationToken).Symbol as IMethodSymbol;
+        if (method is null)
+        {
+            return;
+        }
+
+        var typeName = method.ContainingType.ToDisplayString();
+        var isProviderResolution = typeName == "System.IServiceProvider" &&
+            method.Name == "GetService";
+        var isDependencyInjectionResolution = method.ContainingNamespace.ToDisplayString() ==
+                "Microsoft.Extensions.DependencyInjection" &&
+            method.Name is "GetService" or "GetServices" or "GetRequiredService" or
+                "GetKeyedService" or "GetRequiredKeyedService";
+
+        if (isProviderResolution || isDependencyInjectionResolution)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(NoServiceProviderResolution, invocation.GetLocation()));
+        }
+    }
+
+    private static void AnalyzeArchitectureTypeCreation(SyntaxNodeAnalysisContext context)
+    {
+        var type = context.SemanticModel.GetTypeInfo(context.Node, context.CancellationToken).Type;
+        if (type is INamedTypeSymbol namedType &&
+            (IsService(namedType) || IsBroker(namedType) || IsExposureType(namedType)))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(NoManualArchitectureTypeCreation, context.Node.GetLocation()));
+        }
+    }
+
+    private static void AnalyzeFileApiInServicesOrExposures(SyntaxNodeAnalysisContext context)
+    {
+        var identifier = (IdentifierNameSyntax)context.Node;
+        var containingType = identifier.FirstAncestorOrSelf<TypeDeclarationSyntax>();
+        if (containingType is null ||
+            (!IsService(containingType, context.SemanticModel, context.CancellationToken) &&
+                !IsExposureType(containingType, context.SemanticModel, context.CancellationToken)))
+        {
+            return;
+        }
+
+        var symbol = context.SemanticModel.GetAliasInfo(identifier, context.CancellationToken)?.Target ??
+            context.SemanticModel.GetSymbolInfo(identifier, context.CancellationToken).Symbol;
+        if (symbol is INamedTypeSymbol namedType &&
+            namedType.ToDisplayString() == "System.IO.File")
+        {
+            context.ReportDiagnostic(Diagnostic.Create(NoFileApiInServicesOrExposures, identifier.GetLocation()));
         }
     }
 

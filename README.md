@@ -32,6 +32,9 @@ guidelines described by its diagnostic IDs.
 | RAG025 | Keep files under `Models` as data carriers with auto-properties only |
 | RAG026 | Place enums in any folder under `Models` |
 | RAG027 | Keep `IServiceCollection` registration files at the project root; do not place them under `Exposures` |
+| RAG028 | Do not resolve dependencies from a service provider; inject them through constructors |
+| RAG029 | Do not instantiate services, brokers, or exposures; resolve them through dependency injection |
+| RAG030 | Keep `System.IO.File` operations in brokers, not services or exposures; `Stream` and `MemoryStream` are allowed |
 
 Build the analyzer with `dotnet build Analyzer/Analyzer.csproj` and run its
 tests with `dotnet test Analyzer.Tests/Analyzer.Tests.csproj`. The diagnostics

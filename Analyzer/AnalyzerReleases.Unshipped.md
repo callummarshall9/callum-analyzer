@@ -29,3 +29,6 @@ RAG024 | Architecture | Warning | Place files in Exposures, Models, Services, or
 RAG025 | Architecture | Warning | Keep models as data carriers with auto-properties only
 RAG026 | Architecture | Warning | Place enums in a folder under Models
 RAG027 | Architecture | Warning | Keep IServiceCollection registration files at the project root
+RAG028 | Architecture | Warning | Use constructor injection instead of resolving services from a provider
+RAG029 | Architecture | Warning | Use dependency injection instead of instantiating services, brokers, or exposures
+RAG030 | Architecture | Warning | Keep System.IO.File usage in brokers, not services or exposures

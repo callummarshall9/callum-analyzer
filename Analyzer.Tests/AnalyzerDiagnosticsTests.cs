@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Diagnostics;
 using RoslynArchitectureGuidelines;
 using Xunit;
@@ -93,6 +94,214 @@ public sealed class AnalyzerDiagnosticsTests
         {
             Assert.Contains($"RAG{ruleNumber:000}", diagnosticIds);
         }
+    }
+
+    [Fact]
+    public async Task ReportsGetRequiredServiceFromDependencyInjectionExtensions()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+            using Microsoft.Extensions.DependencyInjection;
+
+            namespace Microsoft.Extensions.DependencyInjection
+            {
+                public static class ServiceProviderServiceExtensions
+                {
+                    public static T GetRequiredService<T>(this IServiceProvider provider) => default!;
+                    public static object GetRequiredService(this IServiceProvider provider, Type serviceType) => default!;
+                    public static T GetService<T>(this IServiceProvider provider) => default!;
+                    public static IEnumerable<T> GetServices<T>(this IServiceProvider provider) => default!;
+                    public static T GetKeyedService<T>(this IServiceProvider provider, object key) => default!;
+                    public static T GetRequiredKeyedService<T>(this IServiceProvider provider, object key) => default!;
+                }
+            }
+
+            namespace Demo
+            {
+                public sealed class Sample
+                {
+                    public object Resolve(IServiceProvider provider) =>
+                        provider.GetRequiredService<object>();
+
+                    public object ResolveNonGeneric(IServiceProvider provider) =>
+                        provider.GetRequiredService(typeof(object));
+
+                    public object ResolveService(IServiceProvider provider) =>
+                        provider.GetService<object>();
+
+                    public object ResolveServices(IServiceProvider provider) =>
+                        provider.GetServices<object>();
+
+                    public object ResolveKeyed(IServiceProvider provider) =>
+                        provider.GetKeyedService<object>("key");
+
+                    public object ResolveRequiredKeyed(IServiceProvider provider) =>
+                        provider.GetRequiredKeyedService<object>("key");
+
+                    public object ResolveIServiceProvider(IServiceProvider provider) =>
+                        provider.GetService(typeof(object))!;
+
+                    public object UseOtherExtension(Sample sample) =>
+                        sample.GetRequiredService<object>();
+                }
+
+                public static class OtherExtensions
+                {
+                    public static T GetRequiredService<T>(this Sample sample) => default!;
+                }
+            }
+            """;
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            new[] { syntaxTree },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+        var matches = diagnostics.Where(diagnostic => diagnostic.Id == "RAG028").ToArray();
+
+        Assert.Equal(7, matches.Length);
+        Assert.DoesNotContain(
+            matches,
+            diagnostic => diagnostic.Location.SourceTree!.GetText().ToString(diagnostic.Location.SourceSpan)
+                .Contains("sample.GetRequiredService", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReportsManualCreationOfServicesBrokersAndExposures()
+    {
+        const string source = """
+            namespace Demo.Services
+            {
+                public sealed class SampleService { }
+            }
+
+            namespace Demo.Brokers
+            {
+                public sealed class SampleBroker { }
+            }
+
+            namespace Demo.Exposures
+            {
+                public sealed class SampleExposure { }
+            }
+
+            namespace Demo
+            {
+                public sealed class OrdinaryType { }
+
+                public sealed class Factory
+                {
+                    public void Create()
+                    {
+                        _ = new Services.SampleService();
+                        _ = new Brokers.SampleBroker();
+                        _ = new Exposures.SampleExposure();
+                        _ = new OrdinaryType();
+                    }
+
+                    public Services.SampleService CreateWithTargetTypedNew() => new();
+                }
+            }
+            """;
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            new[] { syntaxTree },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+        var matches = diagnostics.Where(diagnostic => diagnostic.Id == "RAG029").ToArray();
+
+        Assert.Equal(4, matches.Length);
+        Assert.DoesNotContain(
+            matches,
+            diagnostic => diagnostic.Location.SourceTree!.GetText().ToString(diagnostic.Location.SourceSpan)
+                .Contains("new OrdinaryType", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReportsSystemIoFileUsageOnlyInServicesAndExposures()
+    {
+        const string source = """
+            using System.IO;
+
+            namespace Demo.Services
+            {
+                public sealed class SampleService
+                {
+                    public bool Exists(string path) => File.Exists(path);
+                    public string FileTypeName() => typeof(File).Name;
+                    public Stream PassThrough(Stream stream) => stream;
+                    public MemoryStream CreateStream() => new MemoryStream();
+                }
+            }
+
+            namespace Demo.Exposures
+            {
+                public sealed class SampleExposure
+                {
+                    public string Read(string path) => File.ReadAllText(path);
+                }
+            }
+
+            namespace Demo.Brokers
+            {
+                public sealed class SampleBroker
+                {
+                    public bool Exists(string path) => File.Exists(path);
+                }
+            }
+
+            namespace Demo
+            {
+                public sealed class OtherType
+                {
+                    public bool Exists(string path) => File.Exists(path);
+                }
+            }
+            """;
+
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
+        var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
+            .Split(Path.PathSeparator)
+            .Where(File.Exists)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            "AnalyzerTest",
+            new[] { syntaxTree },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var diagnostics = await compilation
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new ArchitectureGuidelinesAnalyzer()))
+            .GetAnalyzerDiagnosticsAsync();
+        var matches = diagnostics.Where(diagnostic => diagnostic.Id == "RAG030").ToArray();
+
+        Assert.Equal(3, matches.Length);
+        var detectedTypeNames = matches
+            .Select(diagnostic => diagnostic.Location.SourceTree!
+                .GetRoot()
+                .FindNode(diagnostic.Location.SourceSpan)
+                .FirstAncestorOrSelf<ClassDeclarationSyntax>()?
+                .Identifier.ValueText)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(new[] { "SampleExposure", "SampleService", "SampleService" }, detectedTypeNames);
     }
 
     [Fact]
